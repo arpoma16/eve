@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { compileAgentManifest } from "#compiler/normalize-manifest.js";
 import { discoverAgent } from "#discover/discover-agent.js";
+import { resolveDiscoveryProject } from "#discover/project.js";
 import {
   bundleAuthoredModuleCode,
   bundleAuthoredModuleForGeneration,
@@ -1498,4 +1499,108 @@ export default defineWorkflowTool({ description: "Probe", inputSchema: { type: "
       loadAuthoredModuleNamespace(join(app.appRoot, "agent", "tools", "use_native.ts")),
     ).rejects.toThrow(/build\.externalDependencies|asset import/);
   });
+});
+
+describe("compileAgentManifest", () => {
+  const createAppRoot = useTemporaryAppRoots();
+
+  // Resolve the member from its directory, as `eve dev`/`eve build` do, so the
+  // test also covers workspace-member app root detection. The helper's root
+  // `agent/` would make the temp root a standalone app instead of a workspace.
+  async function compileWorkspaceMember(prefix: string, files: Record<string, string>) {
+    const app = await createAppRoot(prefix, {
+      files: {
+        "package.json": JSON.stringify({ dependencies: { eve: "*" }, type: "module" }),
+        ...files,
+      },
+    });
+    await rm(app.agentRoot, { recursive: true });
+    const project = await resolveDiscoveryProject(join(app.appRoot, "agents", "assistant"));
+    const discovered = await discoverAgent(project);
+    return await compileAgentManifest(discovered.manifest);
+  }
+
+  it.each(["execute", "task"] as const)(
+    "stamps a root %s workflow tool id relative to the workspace member app root",
+    async (entryPoint) => {
+      const manifest = await compileWorkspaceMember(
+        "eve-compiled-tool-workspace-member-workflow-id-",
+        {
+          "agents/assistant/agent/agent.ts": 'export default { model: "openai/gpt-5.4" };\n',
+          "agents/assistant/agent/tools/plan.ts": [
+            'import { defineWorkflowTool } from "eve/tools";',
+            "",
+            "export default defineWorkflowTool({",
+            '  description: "Plan something in the background.",',
+            '  inputSchema: { type: "object" },',
+            `  async ${entryPoint}() {`,
+            '    "use workflow";',
+            '    return { status: "ok" };',
+            "  },",
+            "});",
+            "",
+          ].join("\n"),
+        },
+      );
+
+      expect(manifest.tools).toContainEqual(
+        expect.objectContaining({
+          behavior: expect.objectContaining({
+            handling: {
+              entryPoint,
+              kind: "workflow-tool",
+              workflowId: `workflow//./agent/tools/plan//${entryPoint}`,
+            },
+          }),
+          name: "plan",
+        }),
+      );
+    },
+  );
+
+  it.each(["execute", "task"] as const)(
+    "stamps a declared subagent's %s workflow tool id relative to the workspace member app root",
+    async (entryPoint) => {
+      const manifest = await compileWorkspaceMember(
+        "eve-compiled-subagent-tool-workspace-member-workflow-id-",
+        {
+          "agents/assistant/agent/agent.ts": 'export default { model: "openai/gpt-5.4" };\n',
+          "agents/assistant/agent/subagents/reviewer/agent.ts": [
+            "export default {",
+            '  description: "Review plans.",',
+            '  model: "openai/gpt-5.4",',
+            "};",
+            "",
+          ].join("\n"),
+          "agents/assistant/agent/subagents/reviewer/tools/approve.ts": [
+            'import { defineWorkflowTool } from "eve/tools";',
+            "",
+            "export default defineWorkflowTool({",
+            '  description: "Approve a plan.",',
+            '  inputSchema: { type: "object" },',
+            `  async ${entryPoint}() {`,
+            '    "use workflow";',
+            '    return { status: "ok" };',
+            "  },",
+            "});",
+            "",
+          ].join("\n"),
+        },
+      );
+      const reviewer = manifest.subagents.find((subagent) => subagent.name === "reviewer");
+
+      expect(reviewer?.agent.tools).toContainEqual(
+        expect.objectContaining({
+          behavior: expect.objectContaining({
+            handling: {
+              entryPoint,
+              kind: "workflow-tool",
+              workflowId: `workflow//./agent/subagents/reviewer/tools/approve//${entryPoint}`,
+            },
+          }),
+          name: "approve",
+        }),
+      );
+    },
+  );
 });

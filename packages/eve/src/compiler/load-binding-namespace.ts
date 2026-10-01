@@ -21,6 +21,7 @@ export interface ExtensionCompileMount {
 
 /** Loads one node's selected bindings with dependency ordering and per-phase caching. */
 export function createCompiledBindingNamespaceLoader(input: {
+  readonly appRoot?: string;
   readonly bindings?: Readonly<Record<string, AgentModuleBinding>>;
   readonly mounts?: ReadonlyMap<string, ExtensionCompileMount>;
   readonly evaluationId?: string;
@@ -55,6 +56,7 @@ export function createCompiledBindingNamespaceLoader(input: {
         await load(mountSourceId, nextLineage);
       }
       return await loadCompiledBindingNamespace({
+        appRoot: input.appRoot,
         binding,
         loadDependency: (dependencySourceId) => load(dependencySourceId, nextLineage),
         registries: input.registries,
@@ -70,6 +72,7 @@ export function createCompiledBindingNamespaceLoader(input: {
 }
 
 async function loadCompiledBindingNamespace(input: {
+  readonly appRoot?: string;
   readonly binding: AgentModuleBinding;
   readonly loadDependency: CompiledBindingNamespaceLoader;
   readonly mounts?: ReadonlyMap<string, ExtensionCompileMount>;
@@ -92,6 +95,7 @@ async function loadCompiledBindingNamespace(input: {
             entry: mount?.entry,
           };
     return await loadAuthoredModuleNamespace(input.binding.backing.sourcePath, {
+      workflowAppRoot: input.binding.owner.kind === "application" ? input.appRoot : undefined,
       externalDependencies: input.binding.backing.externalDependencies,
       extension,
     });
